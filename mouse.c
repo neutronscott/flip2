@@ -10,12 +10,26 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <dirent.h>
 #include <libevdev/libevdev-uinput.h>
 
 #define DISTANCE 4
+#define DEV_INPUT "/dev/input"
 
 /* ew a global */
 int mousemode = 0;
+
+const char *wanted_devs[] = { "mtk-kpd", "matrix-keypad", 0 };
+
+struct dev_st {
+  int fd;
+  const char *name;
+  struct libevdev *evdev;
+  struct libevdev_uinput *uidev;
+  struct dev_st *next;
+};
+
+struct dev_st *devs_head = NULL;
 
 /* from gnu libc manual
  * https://www.gnu.org/software/libc/manual/html_node/Calculating-Elapsed-Time.html
@@ -54,6 +68,7 @@ int map_code(struct input_event *ev) {
   char cmd[64];
   int ret = -1;
   static struct timeval start;
+  static unsigned int slowdown = 0;
   struct timeval diff;
 
   // start with just worrying about toggle key
@@ -65,7 +80,9 @@ int map_code(struct input_event *ev) {
         start = ev->time;
       } else if (ev->value == 0) {
         timeval_subtract(&diff, &ev->time, &start);
+#ifdef DEBUG
         printf("Held for %ld.%06lds\n", diff.tv_sec, diff.tv_usec);
+#endif
         mousemode = !mousemode;
       }
       return 0;
@@ -85,6 +102,18 @@ int map_code(struct input_event *ev) {
     case KEY_LEFT:
     case KEY_RIGHT:
       return 0;
+    // these keys are muted but their scan codes make the mouse wheel go
+    case KEY_7:
+    case KEY_NUMERIC_STAR:
+    case KEY_9:
+    case KEY_NUMERIC_POUND:
+      return 0;
+    case KEY_VOLUMEUP:
+      if (ev->value != 1) return 0;
+      ev->type = EV_REL; ev->code = REL_WHEEL; ev->value =  1; return -2;
+    case KEY_VOLUMEDOWN:
+      if (ev->value != 1) return 0;
+      ev->type = EV_REL; ev->code = REL_WHEEL; ev->value = -1; return -2;
     }
   } else if (ev->type == EV_MSC) {
     if (ev->code != MSC_SCAN)
@@ -98,8 +127,17 @@ int map_code(struct input_event *ev) {
         ev->type = EV_REL; ev->code = REL_X; ev->value = -DISTANCE; return -2;
       case 34:
         ev->type = EV_REL; ev->code = REL_X; ev->value =  DISTANCE; return -2;
-      case 43:
-        ev->type = EV_KEY; ev->code = BTN_LEFT; ev->value = 1; return -2;
+      case 43: case 26:
+        ev->type = EV_KEY; ev->code = BTN_LEFT;  ev->value = 1; return -2;
+      case 25:
+        ev->type = EV_KEY; ev->code = BTN_RIGHT; ev->value = 1; return -2;
+      case 0: case 1:
+        if (slowdown++ % 5) return 0;
+        else ev->type = EV_REL; ev->code = REL_WHEEL; ev->value =  1; return -2;
+      case 18: case 16:
+        if (slowdown++ % 5) return 0;
+        else ev->type = EV_REL; ev->code = REL_WHEEL; ev->value = -1; return -2;
+        
       case 42:
         break;
     }
@@ -122,57 +160,152 @@ static void print_event(const char *prefix, struct input_event *ev)
       ev->value);
 }
 
-int main(int argc, char **argv) {
-  const char *virtkbd_path, *virtmouse_path;
+/* overkill but I wanted to... */
+int find_devices() {
+  int fd;
+  struct dirent* file;
+  DIR* dir;
+  struct libevdev *evdev;
+  struct dev_st *dev;
 
-  int uinput_fd;
-  int mute_event = 0;
-  int kbd_fd;
-
-  struct input_event event;
-  struct libevdev *kbd_dev;
-  struct libevdev *virtkbd_dev, *virtmouse_dev;
-  struct libevdev_uinput *virtkbd_uidev, *virtmouse_uidev;
-
-  if (argc != 2) {
-    fprintf(stderr, "usage: %s /dev/input/event#\n", argv[0]);
+  dir = opendir(DEV_INPUT);
+  if (dir == NULL) {
+    perror("opendir");
     return -1;
   }
 
-  kbd_fd = open(argv[1], O_RDONLY);
-  ioctl(kbd_fd, EVIOCGRAB, 1);
-  libevdev_new_from_fd(kbd_fd, &kbd_dev);
+  for (file = readdir(dir); file; file = readdir(dir)){
+    char file_path[256];
+    char *name;
+    int found = 0;
+    if (file->d_type != DT_CHR)
+      continue;
 
-  uinput_fd = open("/dev/uinput", O_RDWR);  
+    snprintf(file_path, sizeof(file_path), "%s/%s", DEV_INPUT, file->d_name);
 
-  libevdev_uinput_create_from_device(kbd_dev, uinput_fd, &virtkbd_uidev);
+    fd = open(file_path, O_RDONLY);
+    if (fd < 0) {
+      perror("open");
+      continue;
+    }
 
-  virtmouse_dev = libevdev_new();
-  libevdev_set_name(virtmouse_dev, "vMouse");
-  libevdev_enable_event_code(virtmouse_dev, EV_REL, REL_X, NULL);
-  libevdev_enable_event_code(virtmouse_dev, EV_REL, REL_Y, NULL);
-  libevdev_enable_event_code(virtmouse_dev, EV_REL, REL_WHEEL, NULL);
-  libevdev_enable_event_code(virtmouse_dev, EV_KEY, BTN_LEFT, NULL);
-  libevdev_uinput_create_from_device(virtmouse_dev, LIBEVDEV_UINPUT_OPEN_MANAGED, &virtmouse_uidev);
-  virtkbd_path = libevdev_uinput_get_devnode(virtkbd_uidev);
-  virtmouse_path = libevdev_uinput_get_devnode(virtmouse_uidev);
-  printf("Virtual keyboard:%s mouse:%s\n", virtkbd_path, virtmouse_path);
+    if (libevdev_new_from_fd(fd, &evdev) < 0) {
+      close(fd);
+      continue;
+    }
+
+    for (int i = 0; wanted_devs[i]; i++) {
+      if (strcmp(libevdev_get_name(evdev), wanted_devs[i]) == 0) {
+        dev = malloc(sizeof(struct dev_st));
+        dev->fd = fd;
+        dev->name = libevdev_get_name(evdev);
+        dev->evdev = evdev;
+        dev->next = NULL;
+        if (!devs_head) {
+          devs_head = dev;
+        } else {
+          struct dev_st *d = devs_head;
+          while (d->next)
+            d = d->next;
+          d->next = dev;
+        }
+        found = 1;
+        break;
+      }
+    }
+    if (!found) {
+      libevdev_free(evdev);
+      close(fd);
+    }
+  }
+
+  closedir(dir);
+  return (devs_head == NULL);
+}
+
+int setup_devices(struct libevdev **virtmouse_dev,
+    struct libevdev_uinput **virtmouse_uidev) {
+  struct dev_st *d;
+
+  for (d = devs_head; d; d = d->next) {
+    ioctl(d->fd, EVIOCGRAB, 1);
+    libevdev_uinput_create_from_device(d->evdev, LIBEVDEV_UINPUT_OPEN_MANAGED, &(d->uidev));
+  }
+
+  *virtmouse_dev = libevdev_new();
+  libevdev_set_name(*virtmouse_dev, "vMouse");
+  libevdev_enable_event_code(*virtmouse_dev, EV_REL, REL_X, NULL);
+  libevdev_enable_event_code(*virtmouse_dev, EV_REL, REL_Y, NULL);
+  libevdev_enable_event_code(*virtmouse_dev, EV_REL, REL_WHEEL, NULL);
+  libevdev_enable_event_code(*virtmouse_dev, EV_KEY, BTN_LEFT, NULL);
+  libevdev_enable_event_code(*virtmouse_dev, EV_KEY, BTN_RIGHT, NULL);
+  libevdev_uinput_create_from_device(*virtmouse_dev,
+    LIBEVDEV_UINPUT_OPEN_MANAGED, virtmouse_uidev);
 
   usleep(100000);
+
+  return 0;
+}
+
+int main(int argc, char **argv) {
+  struct input_event event;
+  struct libevdev *virtmouse_dev;
+  struct libevdev_uinput *virtmouse_uidev;
+  int mute_event = 0;
+  int maxfd = 0;
+  fd_set fds, rfds;
+
+  if (find_devices()) {
+    fprintf(stderr, "Found no input devices!\n");
+    return -1;
+  }
+
+  if (setup_devices(&virtmouse_dev, &virtmouse_uidev)) {
+    return -1;
+  }
   
+  FD_ZERO(&fds);
+  for (struct dev_st *d = devs_head; d; d = d->next) {
+    FD_SET(d->fd, &fds);
+    if (d->fd >= maxfd)
+      maxfd = d->fd + 1;
+  }
   for (;;) {
-    read(kbd_fd, &event, sizeof(event));
-    print_event("<<<", &event);
-    // pass-thru if it's remapped
-    mute_event = map_code(&event);
-    if (mute_event > 0) {
-      print_event(">>>", &event);
-      libevdev_uinput_write_event(virtkbd_uidev, event.type, event.code, event.value);
-      libevdev_uinput_write_event(virtkbd_uidev, EV_SYN, SYN_REPORT, 0);
-    } else if (mute_event < 0) {
-      print_event(">>>", &event);
-      libevdev_uinput_write_event(virtmouse_uidev, event.type, event.code, event.value);
-      libevdev_uinput_write_event(virtmouse_uidev, EV_SYN, SYN_REPORT, 0);
+    rfds = fds;
+    if (select(maxfd, &rfds, NULL, NULL, NULL) < 0) {
+      perror("select");
+      return -1;
+    }
+    for (struct dev_st *d = devs_head; d; d = d->next) {
+#ifdef DEBUG
+      char prefix[6];
+#endif
+      if (FD_ISSET(d->fd, &rfds) == 0) {
+        continue;
+      }
+      read(d->fd, &event, sizeof(event));
+#ifdef DEBUG
+      snprintf(prefix, 5, "<%d<", d->fd);
+      print_event(prefix, &event);
+#endif
+      // pass-thru if it's remapped
+      mute_event = map_code(&event);
+      if (mute_event > 0) {
+#ifdef DEBUG
+        snprintf(prefix, 5, ">%d>", d->fd);
+        print_event(prefix, &event);
+#endif
+        libevdev_uinput_write_event(d->uidev, event.type, event.code,
+            event.value);
+        libevdev_uinput_write_event(d->uidev, EV_SYN, SYN_REPORT, 0);
+      } else if (mute_event < 0) {
+#ifdef DEBUG
+        print_event(">M>", &event);
+#endif
+        libevdev_uinput_write_event(virtmouse_uidev, event.type, event.code,
+            event.value);
+        libevdev_uinput_write_event(virtmouse_uidev, EV_SYN, SYN_REPORT, 0);
+      }
     }
   }
 }
