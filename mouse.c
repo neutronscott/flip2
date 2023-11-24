@@ -82,7 +82,7 @@ int map_code(struct dev_st *dev, struct input_event *ev) {
       // always needed to wake screen so we don't confuse user
       mousemode = 0;
       return 1;
-    } else if (ev->code == KEY_HELP) {
+    } else if (ev->code == KEY_MENU) {
       if (ev->value == 1) {
         start = ev->time;
         return 0;
@@ -102,7 +102,7 @@ int map_code(struct dev_st *dev, struct input_event *ev) {
         return 0;
       } else {
         // we need to add back the key-down that we ate earlier
-        libevdev_uinput_write_event(dev->uidev, EV_KEY, KEY_HELP, 1);
+        libevdev_uinput_write_event(dev->uidev, EV_KEY, KEY_MENU, 1);
         libevdev_uinput_write_event(dev->uidev, EV_SYN, SYN_REPORT, 0);
         return 1; // and also send the key-up
       }
@@ -117,18 +117,22 @@ int map_code(struct dev_st *dev, struct input_event *ev) {
     case KEY_ENTER:
       ev->code = BTN_LEFT;
       return -2;
-    case KEY_VOLUMEUP:
+/*    case KEY_VOLUMEUP:
       if (ev->value == 1) mousespeed++;
       return 0; 
     case KEY_VOLUMEDOWN:
       if (ev->value == 1) mousespeed--;
       return 0;
-    default:
+ */
+    case KEY_UP: case KEY_DOWN:
+    case KEY_LEFT: case KEY_RIGHT:
       return 0;
+    default:
+      return 1;
     }
   } else if (ev->type == EV_MSC) {
     if (ev->code != MSC_SCAN)
-      return 0;
+      return 1;
     switch (ev->value) {
       case 35:
         ev->type = EV_REL; ev->code = REL_Y; ev->value = -mousespeed; return -2;
@@ -138,7 +142,7 @@ int map_code(struct dev_st *dev, struct input_event *ev) {
         ev->type = EV_REL; ev->code = REL_X; ev->value = -mousespeed; return -2;
       case 34:
         ev->type = EV_REL; ev->code = REL_X; ev->value =  mousespeed; return -2;
-      case 43: case 26:
+/*      case 43: case 26:
         ev->type = EV_KEY; ev->code = BTN_LEFT;  ev->value = 1; return -2;
       case 25:
         ev->type = EV_KEY; ev->code = BTN_RIGHT; ev->value = 1; return -2;
@@ -154,8 +158,9 @@ int map_code(struct dev_st *dev, struct input_event *ev) {
       case 8:
         if (slowdown++ % 5) return 0;
         else ev->type = EV_REL; ev->code = REL_HWHEEL; ev->value = -1; return -2;
+ */
       default:
-        return 0;
+        return 1;
     }
   }
   return 1;
