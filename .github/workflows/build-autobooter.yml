@@ -1,0 +1,11 @@
+name: autobooter test
+on: [push]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: pre-req
+        run: pip install pyserial pyinstaller
