@@ -74,3 +74,6 @@ magiskboot cpio ramdisk.cpio \
   'add 744 overlay.d/sbin/magisk32.xz ramdisk/overlay.d/sbin/magisk32.xz' \
   'add 744 overlay.d/sbin/stub.xz ramdisk/overlay.d/sbin/stub.xz' \
   patch
+
+magiskboot repack ~/flip2/boot.img
+mv new-boot.img ~/neutron.img
