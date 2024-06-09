@@ -11,5 +11,5 @@ cd libevdev-1.13.2
 make
 
 cd /code
-clang --target=armv7a-linux-androideabi30 -I /tmp/libevdev-1.13.2 /tmp/libevdev-1.13.2/libevdev/.libs/libevdev{,-uinput}.o smouse.c -o mouse
+clang --target=armv7a-linux-androideabi30 -I /tmp/libevdev-1.13.2 /tmp/libevdev-1.13.2/libevdev/.libs/libevdev{,-uinput}.o mouse.c -o mouse
 llvm-strip mouse
