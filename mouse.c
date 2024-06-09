@@ -15,9 +15,25 @@
 
 #define DEV_INPUT "/dev/input"
 
+#define DEPRESS 1
+#define RELEASE 0
+
+#define RC_MUTE   0
+#define RC_KEYB   1
+#define RC_MOUSE -1
+
+#define DEBUG_MODE      0x0001
+#define DEBUG_TIME      0x0002
+#define DEBUG_MSC       0x0004
+#define DEBUG_EVT_IN    0x0010
+#define DEBUG_EVT_KEYB  0x0020
+#define DEBUG_EVT_MOUSE 0x0040
+#define DEBUG_EVT_MUTE  0x0080
+
 /* ew globals */
 int mousemode = 0;
 int mousespeed = 4;
+int debug = 0;
 struct libevdev *virtmouse_dev;
 struct libevdev_uinput *virtmouse_uidev;
 
@@ -57,123 +73,190 @@ timeval_subtract(struct timeval *result, struct timeval *x, struct timeval *y)
 
   /* Compute the time remaining to wait.
      tv_usec is certainly positive. */
-  result->tv_sec = x->tv_sec - y->tv_sec;
+  result->tv_sec  = x->tv_sec  - y->tv_sec;
   result->tv_usec = x->tv_usec - y->tv_usec;
 
   /* Return 1 if result is negative. */
   return x->tv_sec < y->tv_sec;
 }
 
-// returns
-// -2: changed to mouse
-// 0: mute event
-// 1: pass-thru event
-// 2: changed event
-int map_code(struct dev_st *dev, struct input_event *ev) {
-  char cmd[64];
-  int ret = -1;
+void set_mouse(int val) {
+  if (debug & DEBUG_MODE) {
+    if (val) {
+      printf("Enter mouse mode\n");
+    } else {
+      printf("Exit mouse mode\n");
+    }
+  }
+  mousemode = val;
+  if (val) { // wiggle it so user knows it's on and can stop holding button
+    libevdev_uinput_write_event(virtmouse_uidev, EV_REL, REL_X,  1);
+    libevdev_uinput_write_event(virtmouse_uidev, EV_REL, REL_X, -1);
+    libevdev_uinput_write_event(virtmouse_uidev, EV_SYN, SYN_REPORT, 0);
+  }
+}
+
+int toggle(struct dev_st *dev, struct input_event *ev, int value) {
   static struct timeval start;
-  static unsigned int slowdown = 0;
+  static int mute_scan    = 1;
+  static int mute_release = 0;
   struct timeval diff;
 
-  // start with just worrying about toggle key
-  if (ev->type == EV_KEY) {
-    if (ev->code == KEY_POWER) {
-      // always needed to wake screen so we don't confuse user
-      mousemode = 0;
-      return 1;
-    } else if (ev->code == KEY_HELP) {
-      if (ev->value == 1) {
-        start = ev->time;
-        return 0;
-      }
-      if (mousemode) { // long press not required to exit
-        mousemode = 0;
-        return 0;
-      }
-
-      // do math to see if it's long press
-      timeval_subtract(&diff, &ev->time, &start);
-#ifdef DEBUG
-      printf("Held for %ld.%06lds\n", diff.tv_sec, diff.tv_usec);
-#endif
-      if (diff.tv_sec > 0 || diff.tv_usec > 225000) {
-        mousemode = 1;
-        return 0;
-      } else {
-        // we need to add back the key-down that we ate earlier
-        libevdev_uinput_write_event(dev->uidev, EV_KEY, KEY_HELP, 1);
-        libevdev_uinput_write_event(dev->uidev, EV_SYN, SYN_REPORT, 0);
-        return 1; // and also send the key-up
-      }
+  // you get a MSC_SCAN before first key. that sucks. mute that too.
+  if (value == DEPRESS) {
+    start = ev->time;
+    mute_scan = 0;
+    return RC_MUTE;
+  } else if (value == RELEASE) {
+    mute_scan = 1;
+    if (mute_release) {
+      mute_release = 0;
+      return RC_MUTE;
+    }
+    if (mousemode) {
+      // long press not required to exit mousemode
+      set_mouse(0);
+      return RC_MUTE;
+    } else {
+      // we need to add back the key-down that we ate earlier
+      libevdev_uinput_write_event(dev->uidev, EV_KEY, KEY_MENU, 1);
+      libevdev_uinput_write_event(dev->uidev, EV_SYN, SYN_REPORT, 0);
+      return RC_KEYB; // and also send the key-up
+    }
+  } else if (!mute_scan) { // scan codes
+    // do math to see if it's long press
+    timeval_subtract(&diff, &ev->time, &start);
+    if (debug & DEBUG_TIME) printf("Held for %ld.%06lds\n", diff.tv_sec, diff.tv_usec);
+    if (mousemode) return RC_MUTE;
+    if (diff.tv_sec > 0 || diff.tv_usec > 225000) {
+      set_mouse(1);
+      mute_release = 1;
+      return RC_MUTE;
     }
   }
 
-  if (!mousemode)
-    return 1;
+  return RC_MUTE;
+}
+
+#define SCROLL(c, v) \
+  do { \
+    if (ev->value == RELEASE && last_key == ev->code) { \
+      libevdev_uinput_write_event(virtmouse_uidev, EV_REL, REL_Y, delta); \
+      delta = 0; \
+      libevdev_uinput_write_event(virtmouse_uidev, EV_SYN, SYN_REPORT, 0); \
+      ev->type = EV_REL; ev->code = c; ev->value = v; goto mouse; \
+    } else { \
+      goto mute; \
+    } \
+  } while(0)
+
+int map_code(struct dev_st *dev, struct input_event *ev) {
+  int rc = RC_KEYB;
+  static int last_key = -1;
+  static int last_msc = -1;
+  static int delta = 0;
+  static unsigned int slowdown = 0;
 
   if (ev->type == EV_KEY) {
+    // keys get a down and up event
+
+    // only toggle keys are checked regardless of mousemode
+    if (ev->code == KEY_MENU) {
+      rc = toggle(dev, ev, ev->value);
+      goto end;
+    }
+
+    // pass-thru everything if we're not in mousemode
+    if (!mousemode) goto pass;
+
+    // all the mousemode nonsense
     switch (ev->code) {
-    case KEY_ENTER:
-      ev->code = BTN_LEFT;
-      return -2;
-    case KEY_VOLUMEUP:
+    // NOTE: need to mute key presses that are used in scan section
+    case KEY_POWER: set_mouse(0);   goto pass;
+    case KEY_ENTER: ev->code = BTN_LEFT; goto mouse;
+    case KEY_UP:    SCROLL(REL_WHEEL,   1);
+    case KEY_DOWN:  SCROLL(REL_WHEEL,  -1);
+    case KEY_LEFT:  SCROLL(REL_HWHEEL,  1);
+    case KEY_RIGHT: SCROLL(REL_HWHEEL, -1);
+/*  case KEY_VOLUMEUP:
       if (ev->value == 1) mousespeed++;
-      return 0; 
+      goto mute;
     case KEY_VOLUMEDOWN:
       if (ev->value == 1) mousespeed--;
-      return 0;
+      goto mute;
+ */
     default:
-      return 0;
+      goto pass;
     }
   } else if (ev->type == EV_MSC) {
+    // scan codes are repeated as long as a key is held down
     if (ev->code != MSC_SCAN)
-      return 0;
+      goto pass;
+    if (ev->value == 33) { // KEY_MENU
+      rc = toggle(dev, ev, 3);
+      goto end;
+    }
+    if (!mousemode)
+      goto pass;
     switch (ev->value) {
-      case 35:
-        ev->type = EV_REL; ev->code = REL_Y; ev->value = -mousespeed; return -2;
-      case 9:
-        ev->type = EV_REL; ev->code = REL_Y; ev->value =  mousespeed; return -2;
-      case 19:
-        ev->type = EV_REL; ev->code = REL_X; ev->value = -mousespeed; return -2;
-      case 34:
-        ev->type = EV_REL; ev->code = REL_X; ev->value =  mousespeed; return -2;
-      case 43: case 26:
-        ev->type = EV_KEY; ev->code = BTN_LEFT;  ev->value = 1; return -2;
+      case 35: // KEY_UP
+        ev->type = EV_REL; ev->code = REL_Y; ev->value = -mousespeed; delta += mousespeed; goto mouse;
+      case 9: // KEY_DOWN
+        ev->type = EV_REL; ev->code = REL_Y; ev->value =  mousespeed; delta -= mousespeed; goto mouse;
+      case 19: // KEY_LEFT
+        ev->type = EV_REL; ev->code = REL_X; ev->value = -mousespeed; delta += mousespeed; goto mouse;
+      case 34: // KEY_RIGHT
+        ev->type = EV_REL; ev->code = REL_X; ev->value =  mousespeed; delta -= mousespeed; goto mouse;
+
+/*      case 43: case 26:
+        ev->type = EV_KEY; ev->code = BTN_LEFT;  ev->value = 1; goto mouse;
       case 25:
-        ev->type = EV_KEY; ev->code = BTN_RIGHT; ev->value = 1; return -2;
+        ev->type = EV_KEY; ev->code = BTN_RIGHT; ev->value = 1; goto mouse;
       case 0: case 1:
         if (slowdown++ % 5) return 0;
-        else ev->type = EV_REL; ev->code = REL_WHEEL; ev->value =  1; return -2;
+        else ev->type = EV_REL; ev->code = REL_WHEEL; ev->value =  1; goto mouse;
       case 18: case 16:
         if (slowdown++ % 5) return 0;
-        else ev->type = EV_REL; ev->code = REL_WHEEL; ev->value = -1; return -2;
+        else ev->type = EV_REL; ev->code = REL_WHEEL; ev->value = -1; goto mouse;
       case 10:
         if (slowdown++ % 5) return 0;
-        else ev->type = EV_REL; ev->code = REL_HWHEEL; ev->value =  1; return -2;
+        else ev->type = EV_REL; ev->code = REL_HWHEEL; ev->value =  1; goto mouse;
       case 8:
         if (slowdown++ % 5) return 0;
-        else ev->type = EV_REL; ev->code = REL_HWHEEL; ev->value = -1; return -2;
-      default:
-        return 0;
+        else ev->type = EV_REL; ev->code = REL_HWHEEL; ev->value = -1; goto mouse;
+ */
     }
   }
-  return 1;
+  // exit labels
+pass:  rc = RC_KEYB;  goto end;
+mouse: rc = RC_MOUSE; goto end;
+mute:  rc = RC_MUTE;  goto end;
+end:
+  if (ev->type == EV_KEY && ev->value == RELEASE) {
+    last_key = ev->code;
+    delta = 0;
+  } else if (ev->type == EV_MSC && ev->code == MSC_SCAN) {
+    last_msc = ev->value;
+  }
+  return rc;
 }
 
 static void print_event(const char *prefix, struct input_event *ev)
 {
-  if (ev->type != EV_SYN)
-    printf("%s [%s] Event: time %ld.%06ld, type %d (%s), code %d (%s), value %d\n",
-      prefix,
-      mousemode ? "GRAB" : "PASS",
-      ev->input_event_sec,
-      ev->input_event_usec,
-      ev->type,
-      libevdev_event_type_get_name(ev->type),
-      ev->code,
-      libevdev_event_code_get_name(ev->type, ev->code),
-      ev->value);
+  if (ev->type == EV_SYN) return;
+
+  if (ev->type == EV_MSC && !(debug & DEBUG_MSC))
+    return;
+  printf("%s [%s] Event: time %ld.%06ld, type %d (%s), code %d (%s), value %d\n",
+    prefix,
+    mousemode ? "GRAB" : "PASS",
+    ev->input_event_sec,
+    ev->input_event_usec,
+    ev->type,
+    libevdev_event_type_get_name(ev->type),
+    ev->code,
+    libevdev_event_code_get_name(ev->type, ev->code),
+    ev->value);
 }
 
 /* overkill but I wanted to... */
@@ -267,9 +350,14 @@ int detach_mouse() {
 
 int main(int argc, char **argv) {
   struct input_event event;
-  int mute_event = 0;
+  int rc = 0;
   int maxfd = 0;
   fd_set fds, rfds;
+
+  if (argc > 1) {
+    debug = atoi(argv[1]);
+    printf("debug: %08X\n", debug);
+  }
 
   if (find_devices()) {
     fprintf(stderr, "Found no input devices!\n");
@@ -290,34 +378,36 @@ int main(int argc, char **argv) {
       return -1;
     }
     for (struct dev_st *d = devs_head; d; d = d->next) {
-#ifdef DEBUG
       char prefix[6];
-#endif
       if (FD_ISSET(d->fd, &rfds) == 0) {
         continue;
       }
       read(d->fd, &event, sizeof(event));
-#ifdef DEBUG
-      snprintf(prefix, 5, "<%d<", d->fd);
-      print_event(prefix, &event);
-#endif
-      // pass-thru if it's remapped
-      mute_event = map_code(d, &event);
-      if (mute_event > 0) {
-#ifdef DEBUG
-        snprintf(prefix, 5, ">%d>", d->fd);
+      if (debug & DEBUG_EVT_IN) {
+        snprintf(prefix, 5, "<%d<", d->fd);
         print_event(prefix, &event);
-#endif
+      }
+
+      rc = map_code(d, &event);
+      if (rc == RC_KEYB) {
+        if (debug & DEBUG_EVT_KEYB) {
+          snprintf(prefix, 5, ">%d>", d->fd);
+          print_event(prefix, &event);
+        }
         libevdev_uinput_write_event(d->uidev, event.type, event.code,
             event.value);
         libevdev_uinput_write_event(d->uidev, EV_SYN, SYN_REPORT, 0);
-      } else if (mute_event < 0) {
-#ifdef DEBUG
-        print_event(">M>", &event);
-#endif
+      } else if (rc == RC_MOUSE) {
+        if (debug & DEBUG_EVT_MOUSE) {
+          print_event(">M>", &event);
+        }
         libevdev_uinput_write_event(virtmouse_uidev, event.type, event.code,
             event.value);
         libevdev_uinput_write_event(virtmouse_uidev, EV_SYN, SYN_REPORT, 0);
+      } else if (rc == RC_MUTE) {
+        if (debug & DEBUG_EVT_MUTE) {
+          print_event("SSS", &event);
+        }
       }
     }
   }
