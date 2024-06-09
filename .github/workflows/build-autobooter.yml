@@ -10,6 +10,6 @@ jobs:
       - name: pre-req
         run: pip install pyserial pyinstaller
       - name: pyinstaller
-        run: pyinstaller -F autobooter.exe
+        run: pyinstaller -F autobooter.py
       - name: looksies
         run: ls
