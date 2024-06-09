@@ -2,7 +2,7 @@
 OTA=https://g2slave-us-east-01.tclcom.com/a17514a9c29dfaf623fbdde097915c876c94238d/83/781583
 MAGISK=https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk
 
-KEEPVERIFY=true
+KEEPVERITY=true
 KEEPFORCEENCRYPT=true
 RECOVERYMODE=false
 PREINITDEVICE=cache
@@ -13,15 +13,15 @@ magiskboot() {
   ~/flip2/magisk/lib/x86_64/libmagiskboot.so "$@"
 }
 
-mkdir -p ~/flip2 && cd $_
-wget -O magisk.apk "$MAGISK"
+mkdir -p ~/flip2 && pushd $_
+wget -nv -O magisk.apk "$MAGISK"
 mkdir -p magisk && cd $_
-unzip ../magisk.apk
+unzip -q ../magisk.apk
 chmod +x lib/x86_64/libmagiskboot.so
 
 cd ~/flip2
-wget -O ota.zip "$OTA"
-unzip ota.zip
+wget -nv -O ota.zip "$OTA"
+unzip -q ota.zip
 mkdir -p ~/flip2/ota && cd $_
 magiskboot unpack ../boot.img
 mkdir -p ~/flip2/ota/ramdisk && cd $_
@@ -47,7 +47,7 @@ magiskboot compress=xz ~/flip2/neutron/ramdisk/init ~/flip2/neutron/ramdisk/.bac
 SHA1=$(magiskboot sha1 ~/flip2/boot.img)
 
 cat >~/flip2/neutron/ramdisk/.backup/.magisk <<!
-KEEPVERITY=$KEEPVERIFY
+KEEPVERITY=$KEEPVERITY
 KEEPFORCEENCRYPT=$KEEPFORCEENCRYPT
 RECOVERYMODE=$RECOVERYMODE
 PREINITDEVICE=$PREINITDEVICE
@@ -76,4 +76,9 @@ magiskboot cpio ramdisk.cpio \
   patch
 
 magiskboot repack ~/flip2/boot.img
-mv new-boot.img ~/neutron.img
+popd
+mv ~/flip2/neutron/new-boot.img ./neutron.img
+
+printf '\n\n\n\n'
+printf 'md5: %s\n' $(md5sum neutron.img)
+printf 'sha1 %s\n' $(sha1sum neutron.img)
