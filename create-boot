@@ -1,0 +1,76 @@
+#!/bin/bash
+OTA=https://g2slave-us-east-01.tclcom.com/a17514a9c29dfaf623fbdde097915c876c94238d/83/781583
+MAGISK=https://github.com/topjohnwu/Magisk/releases/download/v27.0/Magisk-v27.0.apk
+
+KEEPVERIFY=true
+KEEPFORCEENCRYPT=true
+RECOVERYMODE=false
+PREINITDEVICE=cache
+
+export KEEPVERIFY KEEPFORCEENCRYPT RECOVERYMODE PREINITDEVICE
+
+magiskboot() {
+  ~/flip2/magisk/lib/x86_64/libmagiskboot.so "$@"
+}
+
+mkdir -p ~/flip2 && cd $_
+wget -O magisk.apk "$MAGISK"
+mkdir -p magisk && cd $_
+unzip ../magisk.apk
+chmod +x lib/x86_64/libmagiskboot.so
+
+cd ~/flip2
+wget -O ota.zip "$OTA"
+unzip ota.zip
+mkdir -p ~/flip2/ota && cd $_
+magiskboot unpack ../boot.img
+mkdir -p ~/flip2/ota/ramdisk && cd $_
+magiskboot cpio ../ramdisk.cpio extract
+
+cd ~/flip2
+cp -a ota neutron
+
+mkdir -p ~/flip2/neutron/ramdisk/overlay.d && cd $_
+
+cat >init.custom.rc <<!
+on init
+  setprop neutron.build $(date +%Y%m%dT%H:%M)
+on post-fs-data
+  exec u:r:magisk:s0 root root -- ${MAGISKTMP}/magisk resetprop -n ro.vendor.tct.endurance true
+!
+
+mkdir -p ~/flip2/neutron/ramdisk/overlay.d/sbin ~/flip2/neutron/ramdisk/.backup
+### magisk itself won't run on Linux, only android so magisk --preinit-device needs mimicked
+magiskboot compress=xz ~/flip2/magisk/lib/armeabi-v7a/libmagisk32.so ~/flip2/neutron/ramdisk/overlay.d/sbin/magisk32.xz
+magiskboot compress=xz ~/flip2/magisk/assets/stub.apk ~/flip2/neutron/ramdisk/overlay.d/sbin/stub.xz
+magiskboot compress=xz ~/flip2/neutron/ramdisk/init ~/flip2/neutron/ramdisk/.backup/init.xz
+SHA1=$(magiskboot sha1 ~/flip2/boot.img)
+
+cat >~/flip2/neutron/ramdisk/.backup/.magisk <<!
+KEEPVERITY=$KEEPVERIFY
+KEEPFORCEENCRYPT=$KEEPFORCEENCRYPT
+RECOVERYMODE=$RECOVERYMODE
+PREINITDEVICE=$PREINITDEVICE
+SHA1=$SHA1
+!
+
+tr '\n' '\0' >~/flip2/neutron/ramdisk/.backup/.rmlist <<!
+overlay.d
+overlay.d/sbin
+overlay.d/sbin/magisk32.xz
+overlay.d/sbin/stub.xz
+!
+
+cd ~/flip2/neutron
+
+magiskboot cpio ramdisk.cpio \
+  'mkdir 700 .backup' \
+  'add 400 .backup/.magisk ramdisk/.backup/.magisk' \
+  'add 400 .backup/.rmlist ramdisk/.backup/.rmlist' \
+  'add 750 .backup/init.xz ramdisk/.backup/init.xz' \
+  'mkdir 750 overlay.d' \
+  'mkdir 750 overlay.d/sbin' \
+  'add 700 overlay.d/init.custom.rc ramdisk/overlay.d/init.custom.rc' \
+  'add 744 overlay.d/sbin/magisk32.xz ramdisk/overlay.d/sbin/magisk32.xz' \
+  'add 744 overlay.d/sbin/stub.xz ramdisk/overlay.d/sbin/stub.xz' \
+  patch
