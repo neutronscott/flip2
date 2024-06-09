@@ -1,0 +1,19 @@
+name: Build simple mouse
+on:
+  push:
+    tags:
+      - "mouse*"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Build
+        run: cd ${{ github.workspace }} && docker run -it -v "$PWD":/code saschpe/android-ndk:34-jdk22.0.1_8-ndk26.3.11579264-cmake3.22.1 bash /code/create-boot
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            mouse

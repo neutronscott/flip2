@@ -1,0 +1,15 @@
+#!/bin/bash
+apt install -y xz-utils python3
+
+PATH=$PATH:/opt/android-sdk-linux/ndk/26.3.11579264/toolchains/llvm/prebuilt/linux-x86_64/bin:/opt/android-sdk-linux/ndk/26.3.11579264/prebuilt/linux-x86_64/bin
+
+cd /tmp
+wget -nv https://www.freedesktop.org/software/libevdev/libevdev-1.13.2.tar.xz
+tar vfxJ libevdev-1.13.2.tar.xz
+cd libevdev-1.13.2
+./configure --host=arm-linux-androideabi 'CC=clang --target=armv7a-linux-androideabi30' host_alias=arm-linux-androideabi
+make
+
+cd /code
+clang --target=armv7a-linux-androideabi30 -I /tmp/libevdev-1.13.2 /tmp/libevdev-1.13.2/libevdev/.libs/libevdev{,-uinput}.o smouse.c -o mouse
+llvm-strip mouse
