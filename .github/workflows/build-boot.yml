@@ -1,18 +1,19 @@
 name: Build magisk patched boot
-on: [push]
+on:
+  push:
+    tags:
+      - "boot*"
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Debug
-        run: echo ${{ github.sha }} > Release.txt
       - name: Build
         run: cd ${{ github.workspace }} && bash ./create-boot
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            Release.txt
             neutron.img
