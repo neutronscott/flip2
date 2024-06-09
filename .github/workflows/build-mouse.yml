@@ -2,7 +2,7 @@ name: Build simple mouse
 on:
   push:
     tags:
-      - "mouse*"
+      - "v*"
 
 jobs:
   build:

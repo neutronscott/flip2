@@ -2,7 +2,7 @@ name: Build magisk patched boot
 on:
   push:
     tags:
-      - "boot*"
+      - "v*"
 
 jobs:
   build:
