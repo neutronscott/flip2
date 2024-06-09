@@ -79,6 +79,6 @@ magiskboot repack ~/flip2/boot.img
 popd
 mv ~/flip2/neutron/new-boot.img ./neutron.img
 
-printf '\n\n\n\n'
-printf 'md5: %s\n' $(md5sum neutron.img)
-printf 'sha1 %s\n' $(sha1sum neutron.img)
+printf '\n\n===========================================================\n\n'
+printf 'md5: %s\n' "$(md5sum neutron.img)"
+printf 'sha1 %s\n' "$(sha1sum neutron.img)"
