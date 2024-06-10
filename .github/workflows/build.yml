@@ -1,11 +1,11 @@
-name: Build magisk patched boot
+name: Build everything
 on:
   push:
     tags:
       - "v*"
 
 jobs:
-  build:
+  linux-stuff:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -20,3 +20,19 @@ jobs:
           files: |
             neutron.img
             mouse
+  windows-stuff:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: pre-req
+        run: pip install pyserial pyinstaller
+      - name: pyinstaller
+        run: pyinstaller -F autobooter.py
+      - name: looksies
+        run: ls
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/autobooter.exe
