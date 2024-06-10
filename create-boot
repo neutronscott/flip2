@@ -89,6 +89,10 @@ KEEPVERITY=false magiskboot cpio ramdisk.cpio patch
 magiskboot repack ~/flip2/boot.img
 mv ~/flip2/neutron/new-boot.img "$projdir/neutron-noavb.img"
 
+cd "$projdir"
+
 printf '\n\n===========================================================\n\n'
-printf 'md5: %s\n' "$(md5sum neutron.img)"
-printf 'sha1 %s\n' "$(sha1sum neutron.img)"
+printf 'md5:\n'
+md5sum neutron*.img
+printf 'sha1:\n' "$(sha1sum neutron.img)"
+sha1sum neutron*.img
