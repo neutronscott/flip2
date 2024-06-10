@@ -13,7 +13,9 @@ magiskboot() {
   ~/flip2/magisk/lib/x86_64/libmagiskboot.so "$@"
 }
 
-mkdir -p ~/flip2 && pushd $_
+projdir=$PWD
+
+mkdir -p ~/flip2 && cd $_
 wget -nv -O magisk.apk "$MAGISK"
 mkdir -p magisk && cd $_
 unzip -q ../magisk.apk
@@ -80,8 +82,12 @@ magiskboot cpio ramdisk.cpio \
 magiskboot cpio ramdisk.cpio 'ls / -r'
 
 magiskboot repack ~/flip2/boot.img
-popd
-mv ~/flip2/neutron/new-boot.img ./neutron.img
+mv ~/flip2/neutron/new-boot.img "$projdir/neutron.img"
+
+
+KEEPVERITY=false magiskboot cpio ramdisk.cpio patch
+magiskboot repack ~/flip2/boot.img
+mv ~/flip2/neutron/new-boot.img "$projdir/neutron-noavb.img"
 
 printf '\n\n===========================================================\n\n'
 printf 'md5: %s\n' "$(md5sum neutron.img)"
