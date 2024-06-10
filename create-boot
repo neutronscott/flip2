@@ -36,7 +36,7 @@ cat >init.custom.rc <<!
 on init
   setprop neutron.build $(date +%Y-%m-%dT%H:%M)
 on post-fs-data
-  exec u:r:magisk:s0 root root -- ${MAGISKTMP}/magisk resetprop -n ro.vendor.tct.endurance true
+  exec u:r:magisk:s0 root root -- \${MAGISKTMP}/magisk resetprop -n ro.vendor.tct.endurance true
 !
 
 mkdir -p ~/flip2/neutron/ramdisk/overlay.d/sbin ~/flip2/neutron/ramdisk/.backup
